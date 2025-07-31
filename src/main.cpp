@@ -359,6 +359,48 @@ void *load(void *args)
                     // not webp, try jpg png etc.
 #if _WIN32
                     pixeldata = wic_decode_image(imagepath.c_str(), &w, &h, &c);
+                    if (pixeldata)
+                    {
+                        // WIC channel conversion logic similar to stb_image
+                        if (c == 1)
+                        {
+                            // grayscale -> rgb
+                            unsigned char *rgbdata = (unsigned char *)malloc(w * h * 3);
+                            if (rgbdata)
+                            {
+                                for (int i = 0; i < w * h; i++)
+                                {
+                                    unsigned char gray = pixeldata[i];
+                                    rgbdata[i * 3 + 0] = gray; // B
+                                    rgbdata[i * 3 + 1] = gray; // G
+                                    rgbdata[i * 3 + 2] = gray; // R
+                                }
+                                free(pixeldata);
+                                pixeldata = rgbdata;
+                                c = 3;
+                            }
+                        }
+                        else if (c == 2)
+                        {
+                            // grayscale + alpha -> rgba
+                            unsigned char *rgbadata = (unsigned char *)malloc(w * h * 4);
+                            if (rgbadata)
+                            {
+                                for (int i = 0; i < w * h; i++)
+                                {
+                                    unsigned char gray = pixeldata[i * 2];
+                                    unsigned char alpha = pixeldata[i * 2 + 1];
+                                    rgbadata[i * 4 + 0] = gray;  // B
+                                    rgbadata[i * 4 + 1] = gray;  // G
+                                    rgbadata[i * 4 + 2] = gray;  // R
+                                    rgbadata[i * 4 + 3] = alpha; // A
+                                }
+                                free(pixeldata);
+                                pixeldata = rgbadata;
+                                c = 4;
+                            }
+                        }
+                    }
 #else  // _WIN32
                     pixeldata = stbi_load_from_memory(filedata, length, &w, &h, &c, 0);
                     if (pixeldata)
@@ -401,9 +443,9 @@ void *load(void *args)
                 path_t output_filename2 = get_file_name_without_extension(ltp->output_files[i]) + PATHSTR('.') + ext;
                 v.outpath = output_filename2;
 #if _WIN32
-                fwprintf(stderr, L"ℹ️ Info: Image %s has alpha channel!\n", imagepath.c_str());
+                fwprintf(stderr, L"ℹ️ Info: Image %s has alpha channel! Converting to RGB for JPEG output.\n", imagepath.c_str());
 #else  // _WIN32
-                fprintf(stderr, "ℹ️ Info: Image %s has alpha channel!\n", imagepath.c_str());
+                fprintf(stderr, "ℹ️ Info: Image %s has alpha channel! Converting to RGB for JPEG output.\n", imagepath.c_str());
 #endif // _WIN32
             }
 
@@ -412,9 +454,9 @@ void *load(void *args)
         else
         {
 #if _WIN32
-            fwprintf(stderr, L"🚨 Error: Couldn't read the image '%s'!\n", imagepath.c_str());
+            fwprintf(stderr, L"🚨 Error: Couldn't read the image '%s'! (channels: %d)\n", imagepath.c_str(), c);
 #else  // _WIN32
-            fprintf(stderr, "🚨 Error: Couldn't read the image '%s'!\n", imagepath.c_str());
+            fprintf(stderr, "🚨 Error: Couldn't read the image '%s'! (channels: %d)\n", imagepath.c_str(), c);
 #endif // _WIN32
         }
     }
@@ -637,6 +679,10 @@ void *save(void *args)
         else if (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG"))
         {
 #if _WIN32
+            if (verbose)
+            {
+                fwprintf(stderr, L"🔧 Debug: Saving JPEG with %d channels, size %dx%d\n", v.outimage.elempack, v.outimage.w, v.outimage.h);
+            }
             success = wic_encode_jpeg_image(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data);
 #else
             success = stbi_write_jpg(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data, 100 - (int)stp->compression);

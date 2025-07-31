@@ -55,13 +55,35 @@ unsigned char *wic_decode_image(const wchar_t *filepath, int *w, int *h, int *c)
     if (frame->GetPixelFormat(&pixel_format))
         goto RETURN;
 
-    if (!IsEqualGUID(pixel_format, GUID_WICPixelFormat32bppBGRA))
-        pixel_format = GUID_WICPixelFormat24bppBGR;
-
+    // Enhanced alpha channel detection and handling
+    BOOL has_alpha = FALSE;
     if (global_palette_has_alpha || frame_palette_has_alpha)
-        pixel_format = GUID_WICPixelFormat32bppBGRA;
+    {
+        has_alpha = TRUE;
+    }
+    else
+    {
+        // Check if the pixel format itself has alpha
+        if (IsEqualGUID(pixel_format, GUID_WICPixelFormat32bppBGRA) ||
+            IsEqualGUID(pixel_format, GUID_WICPixelFormat32bppRGBA) ||
+            IsEqualGUID(pixel_format, GUID_WICPixelFormat32bppPBGRA) ||
+            IsEqualGUID(pixel_format, GUID_WICPixelFormat32bppPRGBA))
+        {
+            has_alpha = TRUE;
+        }
+    }
 
-    channels = IsEqualGUID(pixel_format, GUID_WICPixelFormat32bppBGRA) ? 4 : 3;
+    // Choose appropriate output format based on alpha detection
+    if (has_alpha)
+    {
+        pixel_format = GUID_WICPixelFormat32bppBGRA;
+        channels = 4;
+    }
+    else
+    {
+        pixel_format = GUID_WICPixelFormat24bppBGR;
+        channels = 3;
+    }
 
     if (converter->Initialize(frame, pixel_format, WICBitmapDitherTypeNone, 0, 0.0, WICBitmapPaletteTypeCustom))
         goto RETURN;
@@ -197,7 +219,38 @@ RETURN:
 
 int wic_encode_jpeg_image(const wchar_t *filepath, int w, int h, int c, void *bgrdata)
 {
-    // assert c == 3
+    // Convert 4-channel RGBA to 3-channel RGB for JPEG
+    unsigned char *rgbdata = 0;
+    int ret = 0;
+
+    if (c == 4)
+    {
+        // Convert RGBA to RGB by removing alpha channel
+        rgbdata = (unsigned char *)malloc(w * h * 3);
+        if (!rgbdata)
+            return 0;
+
+        const unsigned char *src = (const unsigned char *)bgrdata;
+        unsigned char *dst = rgbdata;
+
+        for (int i = 0; i < w * h; i++)
+        {
+            // Copy BGR channels, skip alpha
+            dst[0] = src[0]; // B
+            dst[1] = src[1]; // G
+            dst[2] = src[2]; // R
+            src += 4;        // Skip alpha
+            dst += 3;
+        }
+
+        bgrdata = rgbdata;
+        c = 3;
+    }
+    else if (c != 3)
+    {
+        // Invalid channel count for JPEG
+        return 0;
+    }
 
     IWICImagingFactory *factory = 0;
     IWICStream *stream = 0;
@@ -207,7 +260,6 @@ int wic_encode_jpeg_image(const wchar_t *filepath, int w, int h, int c, void *bg
     WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
     int stride = (w * c * 8 + 7) / 8;
     unsigned char *data = 0;
-    int ret = 0;
 
     PROPBAG2 option = {0};
     option.pstrName = L"ImageQuality";
@@ -274,6 +326,8 @@ int wic_encode_jpeg_image(const wchar_t *filepath, int w, int h, int c, void *bg
 RETURN:
     if (data)
         free(data);
+    if (rgbdata)
+        free(rgbdata);
     if (encoder)
         encoder->Release();
     if (frame)
